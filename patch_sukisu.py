@@ -80,6 +80,17 @@ patch("runtime/ksud_integration.c",
       ]),
       "copy_*_user_nofault -> probe_kernel_*")
 
+# strncpy_from_user_nofault (5.8+) -> strncpy_from_user (available in 4.14)
+for f in ["feature/sucompat.c", "runtime/ksud_integration.c", "sulog/event.c"]:
+    patch(f,
+          lambda s: replace_all(s, [("strncpy_from_user_nofault(", "strncpy_from_user(")]),
+          "strncpy_from_user_nofault -> strncpy_from_user")
+
+# copy_from_kernel_nofault (5.8+) -> probe_kernel_read (4.14)
+patch("selinux/inode.c",
+      lambda s: replace_all(s, [("copy_from_kernel_nofault(", "probe_kernel_read(")]),
+      "copy_from_kernel_nofault -> probe_kernel_read")
+
 # __poll_t & kernel-side EPOLL* are 4.16+; 4.14 uses unsigned int / POLL*
 poll_pairs = [("__poll_t", "unsigned int"),
               ("EPOLLHUP", "POLLHUP"), ("EPOLLIN", "POLLIN"),
