@@ -98,6 +98,19 @@ jobs:
           sed -i 's|ifeq ($(wildcard /usr/include/yaml.h),)|ifeq (,)|' scripts/dtc/Makefile
           grep -n -A4 'NO_YAML\|yamltree' scripts/dtc/Makefile
 
+      - name: Patch SukiSU arm64 syscall_fn_t definition
+        run: |
+          set -e
+          # SukiSU-Nova v3.0.0 defines syscall_fn_t only for x86_64/riscv, but
+          # arm64 needs it too. On arm64 the syscall entry signature is
+          #   long (*)(const struct pt_regs *)
+          # which is the same as the riscv branch. Add an arm64 typedef.
+          HOOK="$HOME/SukiSU-Nova/kernel/hook/syscall_hook.h"
+          # aarch64 uses the exact same syscall_fn_t signature as riscv.
+          sed -i 's@#elif defined(__riscv)@#elif defined(__riscv) || defined(__aarch64__)@' "$HOOK"
+          echo "--- patched typedef ---"
+          grep -n -A8 'defined(__x86_64__)' "$HOOK"
+
       - name: Build kernel
         run: |
           set -e
