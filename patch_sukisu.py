@@ -48,8 +48,58 @@ def add_nocfi_flag(s):
     return s.replace(anchor, "ccflags-y += -D__nocfi=\n" + anchor, 1)
 
 
+def replace_all(s, pairs):
+    for old, new in pairs:
+        s = s.replace(old, new)
+    return s
+
+
+def drop_line(line_text):
+    def f(s):
+        return "\n".join(l for l in s.split("\n") if l.strip() != line_text)
+    return f
+
+
 patch("core/init.c", guard_module_import_ns, "guard MODULE_IMPORT_NS (pre-5.3)")
 patch("Kbuild", add_nocfi_flag, "define empty __nocfi (pre-5.13)")
+
+# feature/sucompat.c: <linux/pgtable.h> only exists on 5.x; on 4.14 the
+# pgtable definitions come via <asm/pgtable.h> (already pulled in by linux/mm.h).
+patch("feature/sucompat.c",
+      drop_line("#include <linux/pgtable.h>"),
+      "drop linux/pgtable.h include")
+
+# copy_*_nofault (5.8+) -> probe_kernel_read/write (present since 2.6.x)
+patch("hook/arm64/patch_memory.c",
+      lambda s: replace_all(s, [("copy_to_kernel_nofault(", "probe_kernel_write(")]),
+      "copy_to_kernel_nofault -> probe_kernel_write")
+patch("runtime/ksud_integration.c",
+      lambda s: replace_all(s, [
+          ("copy_from_user_nofault(", "probe_kernel_read("),
+          ("copy_to_user_nofault(", "probe_kernel_write("),
+      ]),
+      "copy_*_user_nofault -> probe_kernel_*")
+
+# __poll_t & kernel-side EPOLL* are 4.16+; 4.14 uses unsigned int / POLL*
+poll_pairs = [("__poll_t", "unsigned int"),
+              ("EPOLLHUP", "POLLHUP"), ("EPOLLIN", "POLLIN"),
+              ("EPOLLRDNORM", "POLLRDNORM"), ("EPOLLERR", "POLLERR"),
+              ("EPOLLOUT", "POLLOUT")]
+for f in ["infra/event_queue.c", "infra/event_queue.h",
+          "infra/file_wrapper.c", "sulog/fd.c"]:
+    patch(f, lambda s, p=poll_pairs: replace_all(s, p),
+          "__poll_t/EPOLL* -> unsigned int/POLL*")
+
+# struct_size() arrived in 4.18; use sizeof(*node)+len on 4.14.
+patch("infra/event_queue.c",
+      lambda s: replace_all(s, [("struct_size(node, payload, len)",
+                                 "(sizeof(*node) + len)")]),
+      "struct_size -> sizeof+len")
+
+# <linux/minmax.h> was split out in 5.10; on 4.14 min/max are in linux/kernel.h.
+patch("sulog/event.c",
+      drop_line("#include <linux/minmax.h>"),
+      "drop linux/minmax.h include")
 
 print("=== verification ===")
 init = os.path.join(SRC, "core/init.c")
