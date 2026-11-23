@@ -111,6 +111,11 @@ jobs:
           echo "--- patched typedef ---"
           grep -n -A8 'defined(__x86_64__)' "$HOOK"
 
+      - name: Patch SukiSU legacy kernel compat
+        run: |
+          set -e
+          python3 patch_sukisu.py "$HOME/SukiSU-Nova/kernel"
+
       - name: Build kernel
         run: |
           set -e
