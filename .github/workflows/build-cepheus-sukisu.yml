@@ -37,8 +37,10 @@ jobs:
       - name: Integrate SukiSU Nova into kernel source
         run: |
           set -e
-          # Same layout as SukiSU-Nova kernel/setup.sh, but using GitHub clone.
-          ln -sfn ../SukiSU-Nova/kernel drivers/kernelsu
+          # Symlink must point at $HOME/SukiSU-Nova/kernel, NOT a relative
+          # ../ path (which resolves to the runner work dir and does not exist).
+          rm -rf drivers/kernelsu
+          ln -s "$HOME/SukiSU-Nova/kernel" drivers/kernelsu
 
           grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || \
             printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
@@ -72,9 +74,12 @@ jobs:
           }
 
           # SukiSU Nova Kconfig: KSU depends on KPROBES and EXT4_FS.
+          # kprobe hook needs kallsyms to resolve kernel symbol addresses.
           set_cfg CONFIG_KPROBES y
           set_cfg CONFIG_KPROBE_EVENTS y
           set_cfg CONFIG_EXT4_FS y
+          set_cfg CONFIG_KALLSYMS y
+          set_cfg CONFIG_KALLSYMS_ALL y
           set_cfg CONFIG_KSU y
           set_cfg CONFIG_KSU_MANUAL_SU y
 
