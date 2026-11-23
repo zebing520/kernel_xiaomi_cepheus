@@ -91,6 +91,71 @@ patch("selinux/inode.c",
       lambda s: replace_all(s, [("copy_from_kernel_nofault(", "probe_kernel_read(")]),
       "copy_from_kernel_nofault -> probe_kernel_read")
 
+# ---- Stub out advanced features that structurally depend on 5.x+ APIs ----
+# These are NOT required for root itself (root core = syscall hook via kprobe
+# + su + manager comm). On this vendor 4.14 kernel they cannot compile:
+#   * lsm_hook.c      -> security_hook_list uses list_head (vendor 4.14) while
+#                        SukiSU assumes hlist; also 6.12 static_call API.
+#   * selinux_hide.c  -> needs selinux_state/selinux_policy (5.4+) and calls
+#                        *_with_policy SELinux APIs that do not exist on 4.14.
+#   * pkg_observer.c  -> fsnotify_ops.handle_inode_event is 5.8+.
+#   * cpu_spoof.c     -> <vdso/datapage.h> is 5.4+.
+# Replacing each .c with a minimal stub (same exported symbols) keeps the
+# module linkable while dropping only those non-essential features.
+
+def stub_file(path, body, label):
+    full = os.path.join(SRC, path)
+    with open(full, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(body)
+    print(f"[STUB] {label}: {path}")
+
+
+stub_file("hook/lsm_hook.c", """// KSU 4.14 compatibility stub (LSM hook needs 5.x+/6.12 APIs).
+#include <linux/types.h>
+#include <linux/init.h>
+#include "hook/lsm_hook.h"
+int ksu_lsm_hook(struct ksu_lsm_hook *hook) { (void)hook; return 0; }
+void ksu_lsm_unhook(struct ksu_lsm_hook *hook) { (void)hook; }
+int ksu_register_lsm_hook(struct ksu_lsm_hook *hook) { (void)hook; return 0; }
+void ksu_unregister_lsm_hook(struct ksu_lsm_hook *hook) { (void)hook; }
+void __init ksu_lsm_hook_init(void) {}
+void __exit ksu_lsm_hook_exit(void) {}
+""", "lsm_hook -> no-op stubs")
+
+stub_file("feature/selinux_hide.c", """// KSU 4.14 compatibility stub (SELinux hide needs 5.4+ selinux_state/policy).
+#include <linux/types.h>
+void ksu_selinux_hide_init(void) {}
+void ksu_selinux_hide_exit(void) {}
+void ksu_selinux_hide_drop_backup_if_unused(void) {}
+void ksu_selinux_hide_handle_second_stage(void) {}
+void ksu_selinux_hide_handle_post_fs_data(void) {}
+""", "selinux_hide -> no-op stubs")
+
+stub_file("manager/pkg_observer.c", """// KSU 4.14 compatibility stub (fsnotify handle_inode_event is 5.8+).
+#include <linux/types.h>
+#include <linux/init.h>
+int ksu_observer_init(void) { return 0; }
+void __exit ksu_observer_exit(void) {}
+""", "pkg_observer -> no-op stubs")
+
+stub_file("extension/cpu_spoof.c", """// KSU 4.14 compatibility stub (<vdso/*.h> is 5.4+).
+#include <linux/uaccess.h>
+#include <linux/errno.h>
+#include <linux/types.h>
+int ksu_extension_cpu_spoof_io(u32 id, void __user *raw)
+{
+    (void)id; (void)raw;
+    return -EOPNOTSUPP;
+}
+""", "cpu_spoof -> no-op stub")
+
+# backup_sepolicy is declared extern in include/ksu.h; selinux_hide.c was its
+# only definition. Since selinux_hide is now stubbed, drop the extern to avoid
+# any unresolved reference if some other TU includes ksu.h and touches it.
+patch("include/ksu.h",
+      drop_line("extern struct selinux_policy *backup_sepolicy;"),
+      "drop backup_sepolicy extern")
+
 # __poll_t & kernel-side EPOLL* are 4.16+; 4.14 uses unsigned int / POLL*
 poll_pairs = [("__poll_t", "unsigned int"),
               ("EPOLLHUP", "POLLHUP"), ("EPOLLIN", "POLLIN"),
