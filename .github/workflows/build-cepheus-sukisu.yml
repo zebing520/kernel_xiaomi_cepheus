@@ -19,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc ccache curl git zip unzip \
-            libncurses-dev cpio flex bison libssl-dev libyaml-dev python3
+            libncurses-dev cpio flex bison libssl-dev python3
 
       - name: Clone Proton Clang toolchain
         run: |
@@ -89,6 +89,15 @@ jobs:
           echo "--- selected options ---"
           grep -E 'CONFIG_(KPROBES|KPROBE_EVENTS|EXT4_FS|KSU|KPM|KALLSYMS)' "$DEFCONFIG" || true
 
+      - name: Patch dtc to avoid libyaml link
+        run: |
+          set -e
+          # The runner has /usr/include/yaml.h so dtc tries to build yamltree.o
+          # and link -lyaml, but the cross linker cannot resolve it. dtc's YAML
+          # output is irrelevant for booting, so force the NO_YAML path.
+          sed -i 's|ifeq ($(wildcard /usr/include/yaml.h),)|ifeq (,)|' scripts/dtc/Makefile
+          grep -n -A4 'NO_YAML\|yamltree' scripts/dtc/Makefile
+
       - name: Build kernel
         run: |
           set -e
@@ -98,9 +107,9 @@ jobs:
           export PATH="$CLANG_PATH/bin:$PATH"
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          # Build host tools (dtc/modpost/genksyms) with system gcc so they link
-          # against libyaml correctly; clang/ld.lld are only for the target kernel.
-          MAKE_ARGS="O=out CC=clang CXX=clang++ HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld \
+          # Build host tools (dtc/modpost/genksyms) with system gcc; clang/ld.lld
+          # are only for the target kernel.
+          MAKE_ARGS="O=out CC=clang CXX=clang++ HOSTCC=gcc HOSTCXX=g++ \
             CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld"
 
