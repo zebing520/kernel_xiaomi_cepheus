@@ -91,6 +91,45 @@ patch("selinux/inode.c",
       lambda s: replace_all(s, [("copy_from_kernel_nofault(", "probe_kernel_read(")]),
       "copy_from_kernel_nofault -> probe_kernel_read")
 
+# strncpy_from_user() is declared in <linux/uaccess.h> on 4.14. Several files
+# call it after our nofault->plain replacement but lack that include, causing
+# "implicit declaration" errors. Walk the whole tree and inject the include
+# into any .c that calls strncpy_from_user / copy_to_user / copy_from_user but
+# has no uaccess.h include. Insert AFTER the first #include block line.
+def ensure_uaccess_include(s):
+    if "#include <linux/uaccess.h>" in s or '#include "linux/uaccess.h"' in s:
+        return s
+    calls = ("strncpy_from_user(", "strncpy_from_user_nofault(",
+             "copy_to_user(", "copy_from_user(")
+    if not any(c in s for c in calls):
+        return s
+    lines = s.split("\n")
+    # insert before the first #include line
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("#include"):
+            lines.insert(i, "#include <linux/uaccess.h>")
+            return "\n".join(lines)
+    # no includes at all: prepend
+    return "#include <linux/uaccess.h>\n" + s
+
+_uaccess_fixed = []
+for root, dirs, files in os.walk(SRC):
+    # skip architectures not compiled on arm64
+    if "riscv64" in root or "x86_64" in root:
+        continue
+    for fn in files:
+        if not fn.endswith(".c"):
+            continue
+        full = os.path.join(root, fn)
+        rel = os.path.relpath(full, SRC)
+        # skip files we stubbed out (they no longer call the helpers)
+        s = open(full, encoding="utf-8", errors="surrogateescape").read()
+        s2 = ensure_uaccess_include(s)
+        if s2 != s:
+            open(full, "w", encoding="utf-8", errors="surrogateescape").write(s2)
+            _uaccess_fixed.append(rel)
+print(f"[OK]   ensure <linux/uaccess.h> in {len(_uaccess_fixed)} files: {_uaccess_fixed}")
+
 # ---- Stub out advanced features that structurally depend on 5.x+ APIs ----
 # These are NOT required for root itself (root core = syscall hook via kprobe
 # + su + manager comm). On this vendor 4.14 kernel they cannot compile:
