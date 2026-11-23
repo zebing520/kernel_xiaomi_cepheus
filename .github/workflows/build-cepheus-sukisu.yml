@@ -19,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc ccache curl git zip unzip \
-            libncurses-dev cpio flex bison libssl-dev python3
+            libncurses-dev cpio flex bison libssl-dev libyaml-dev python3
 
       - name: Clone Proton Clang toolchain
         run: |
@@ -98,7 +98,11 @@ jobs:
           export PATH="$CLANG_PATH/bin:$PATH"
           export CLANG_TRIPLE=aarch64-linux-gnu-
 
-          MAKE_ARGS="O=out CC=clang CXX=clang++ CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld"
+          # Build host tools (dtc/modpost/genksyms) with system gcc so they link
+          # against libyaml correctly; clang/ld.lld are only for the target kernel.
+          MAKE_ARGS="O=out CC=clang CXX=clang++ HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld \
+            CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld"
 
           make $MAKE_ARGS cepheus_defconfig
           make -j"$(nproc)" $MAKE_ARGS 2>&1 | tee kernel.log
