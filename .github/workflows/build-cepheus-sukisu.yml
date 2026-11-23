@@ -1,0 +1,121 @@
+name: Build cepheus 4.14 + SukiSU Nova (Non-GKI)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout kernel source (Android 11 / eleven branch)
+        uses: actions/checkout@v4
+        with:
+          ref: eleven
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc ccache curl git zip unzip \
+            libncurses-dev cpio flex bison libssl-dev python3
+
+      - name: Clone Proton Clang toolchain
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git "$HOME/proton-clang"
+
+      - name: Clone AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "$HOME/AnyKernel3"
+
+      - name: Clone SukiSU Nova kernel tree (v3.0.0)
+        run: |
+          git clone --depth=1 --branch v3.0.0 \
+            https://github.com/SukiSU-Nova/SukiSU-Nova.git "$HOME/SukiSU-Nova"
+
+      - name: Integrate SukiSU Nova into kernel source
+        run: |
+          set -e
+          # Same layout as SukiSU-Nova kernel/setup.sh, but using GitHub clone.
+          ln -sfn ../SukiSU-Nova/kernel drivers/kernelsu
+
+          grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+
+          if ! grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig; then
+            sed -i '0,/endmenu/s//source "drivers\/kernelsu\/Kconfig"\nendmenu/' drivers/Kconfig
+          fi
+
+          echo "--- drivers/kernelsu ---"
+          ls -l drivers/kernelsu
+          echo "--- Makefile tail ---"
+          tail -5 drivers/Makefile
+          echo "--- Kconfig source line ---"
+          grep -n 'kernelsu' drivers/Kconfig
+
+      - name: Enable SukiSU / kprobe config
+        run: |
+          set -e
+          DEFCONFIG=arch/arm64/configs/cepheus_defconfig
+
+          set_cfg() {
+            key="$1"
+            val="$2"
+            if grep -q "^# ${key} is not set$" "$DEFCONFIG"; then
+              sed -i "s/^# ${key} is not set$/${key}=${val}/" "$DEFCONFIG"
+            elif grep -q "^${key}=" "$DEFCONFIG"; then
+              sed -i "s/^${key}=.*$/${key}=${val}/" "$DEFCONFIG"
+            else
+              echo "${key}=${val}" >> "$DEFCONFIG"
+            fi
+          }
+
+          # SukiSU Nova Kconfig: KSU depends on KPROBES and EXT4_FS.
+          set_cfg CONFIG_KPROBES y
+          set_cfg CONFIG_KPROBE_EVENTS y
+          set_cfg CONFIG_EXT4_FS y
+          set_cfg CONFIG_KSU y
+          set_cfg CONFIG_KSU_MANUAL_SU y
+
+          # KPM is intentionally OFF for first build on 4.14.
+          echo "# CONFIG_KPM is not set" >> "$DEFCONFIG"
+
+          echo "--- selected options ---"
+          grep -E 'CONFIG_(KPROBES|KPROBE_EVENTS|EXT4_FS|KSU|KPM|KALLSYMS)' "$DEFCONFIG" || true
+
+      - name: Build kernel
+        run: |
+          set -e
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CLANG_PATH="$HOME/proton-clang"
+          export PATH="$CLANG_PATH/bin:$PATH"
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          MAKE_ARGS="O=out CC=clang CXX=clang++ CROSS_COMPILE=$CLANG_PATH/bin/aarch64-linux-gnu- CROSS_COMPILE_ARM32=$CLANG_PATH/bin/arm-linux-gnueabi- LD=ld.lld"
+
+          make $MAKE_ARGS cepheus_defconfig
+          make -j"$(nproc)" $MAKE_ARGS 2>&1 | tee kernel.log
+
+          test -f out/arch/arm64/boot/Image.gz-dtb
+          ls -lh out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Pack AnyKernel3 flashable zip
+        run: |
+          set -e
+          cp anykernel.sh "$HOME/AnyKernel3/"
+          cp out/arch/arm64/boot/Image.gz-dtb "$HOME/AnyKernel3/"
+          cd "$HOME/AnyKernel3"
+          ZIP_NAME="cepheus-4.14-SukiSU-Nova-v3.0.0-AK3.zip"
+          zip -r9 "$GITHUB_WORKSPACE/out/$ZIP_NAME" .
+          ls -lh "$GITHUB_WORKSPACE/out/$ZIP_NAME"
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cepheus-sukisu-nova-kernel
+          path: |
+            out/*.zip
+            kernel.log
+          if-no-files-found: error
